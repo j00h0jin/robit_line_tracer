@@ -27,6 +27,7 @@
 
 void set_speed(unsigned char speed_1, unsigned char speed_2);
 
+volatile unsigned int adc_PSD_value[2]; // [1] 사용
 volatile unsigned int adc_value[6];
 volatile int current_idx = 0;
 
@@ -49,9 +50,11 @@ ISR(TIMER0_OVF_vect) // timer0 interrupt
 
 ISR(ADC_vect)
 {
-	adc_value[current_idx] = ADC;
-	current_idx = (current_idx + 1) % 6;
-	ADMUX = (ADMUX & 0xE0) | ((current_idx + 2) & 0x1F);
+	if(current_idx < 2){ adc_PSD_value[current_idx] = ADC; }
+	else{ adc_value[current_idx - 2] = ADC; }
+	
+	current_idx = (current_idx + 1) % 8;
+	ADMUX = (ADMUX & 0xE0) | (current_idx & 0x07);
 
 	ADCSRA |= (1 << ADSC);
 }
@@ -125,7 +128,16 @@ int main(void)
 	int is_line_course_end = 0; // 차선 코스 끝 부분 도달
 	int is_line_flag = 0; // 차선 코스 종료
 	
-	int is_parking = 0; // 주차 구간 진입
+	int is_stop_bar = 0; // 차단바 구간
+	int is_stop_bar_flag = 0;
+	
+	int is_parking = 0; // 주차 구간
+	int turn_left = 0; // 좌회전
+	int is_parking_end = 0;
+	int is_parking_flag = 0;
+	
+	// PSD
+	float voltage[2] = {0};
 	
 	lcdInit();
 	lcdClear();
@@ -172,6 +184,12 @@ int main(void)
 			normalization[i] = 1.0f - (float)(moveAvgFilterValue[i]-minMax[i][0]) / temp;
 		}
 		
+		// PSD
+		for (int i = 0; i < 2; i++)
+		{
+			voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
+		}
+		
 		// 라인 트레이싱 알고리즘
 		
 		int detect_count = 0;
@@ -179,15 +197,13 @@ int main(void)
 			if (normalization[i] >= 0.3f) detect_count++;
 		}
 
-		// --- 루프 내부 ---
-
 		// 센서 이진화 (0.4 이상 1, 미만 0)
 		int bin[6] = {0};
 		for (int i = 0; i < 6; i++) {
 			if (normalization[i] >= 0.4f) bin[i] = 1;
 		}
 
-		// 조건 판단용 변수
+		// 변수
 		int is_center = (bin[2] || bin[3]); // 중앙 센서 반응
 		int is_fork = (bin[0] || bin[1] || bin[4] || bin[5]) && (detect_count >= 3);
 		int is_full = bin[0] && bin[1] && bin[2] && bin[3] && bin[4] && bin[5];
@@ -213,7 +229,7 @@ int main(void)
 					set_speed(65, 150); 
 					last_turn_dir = -1;
 				}
-				_delay_ms(100);
+				_delay_ms(70);
 				last_error = 0.0f;
 				missing_count = 0;
 			
@@ -251,7 +267,7 @@ int main(void)
 				_delay_ms(100);
 				motor1Stop(); motor2Backward();
 				set_speed(0, 100);
-				_delay_ms(350);
+				_delay_ms(400);
 			}
 			else if(bin[5]) {
 				is_line_course_end ++;
@@ -276,7 +292,7 @@ int main(void)
 						last_turn_dir = 0;
 						is_line_flag = 1;
 						basic_mode = 1;
-						// is_parking = 1;
+						is_stop_bar = 1;
 						continue;
 					}
 					motor1Stop(); motor2Stop();
@@ -294,11 +310,139 @@ int main(void)
 			set_speed(100, 100);
 		}
 		
+		// 차단바 구간
+		if(is_stop_bar && is_line_flag)
+		{
+			if(voltage[1] > 2.8)
+			{
+				while(voltage[1] > 1.7)
+				{
+					voltage[1] = ((float)adc_PSD_value[1] * 5) / 1023;
+					motor1Forward(); motor2Forward();
+					set_speed(90, 90);
+				}
+				
+				motor1Stop(); motor2Stop();
+				set_speed(0, 0);
+				
+				while(voltage[1] > 0.7)
+				{
+					voltage[1] = ((float)adc_PSD_value[1] * 5) / 1023;
+				}
+				_delay_ms(1500);
+				is_stop_bar_flag = 1;
+				is_parking = 1;
+			}
+		}
+		
+		if(is_parking && is_stop_bar_flag)
+		{
+			basic_mode = 0;
+			if ((normalization[0] >= 0.7f || normalization[1] >= 0.7f) && !turn_left) 
+			{
+				if(bin[0] && bin[1] && !bin[2] && !bin[3] && bin[4] && bin[5])
+				{
+					motor1Stop(); motor2Stop();
+					set_speed(0, 0);
+					is_parking_flag = 1;
+					while(1);
+				}
+				motor1Stop(); motor2Stop();
+				set_speed(0, 0);
+				_delay_ms(50);
+				
+				motor1Backward(); motor2Forward();
+				set_speed(100, 100);
+				_delay_ms(500);
+				
+				turn_left = 1;
+				last_turn_dir = -1;
+				last_error = 0;
+			}
+			else if (detect_count == 0)
+			{
+				missing_count++;
+							
+				// 000000 -> 후진
+				if (missing_count > 30)
+				{
+					if(!is_parking_end)
+					{
+						is_parking_end = 1;
+						turn_left = 0;
+						motor1Forward(); motor2Forward();
+						set_speed(80, 80);
+						while(!is_full);
+						_delay_ms(2000);
+						motor1Backward(); motor2Backward();
+						set_speed(80, 80);
+						while(is_full);
+						while(detect_count == 0);
+						while(!is_full);
+					}
+					else
+					{
+						turn_left = 1;
+						motor1Backward(); motor2Backward();
+						set_speed(80, 80);
+						while(detect_count == 0);
+						
+						turn_left = 0;
+						motor1Forward(); motor2Forward();
+						set_speed(80, 80);
+						
+					}
+				}
+			}
+			else
+			{
+				missing_count = 0;
+							
+				float error = (-5.0f * normalization[0]) +
+				(-2.5f * normalization[1]) +
+				(-0.5f * normalization[2]) +
+				( 0.5f * normalization[3]) +
+				( 2.5f * normalization[4]) +
+				( 5.0f * normalization[5]);
+
+				if (error < -1.0f) last_turn_dir = -1;
+				else if (error > 1.0f) last_turn_dir = 1;
+
+				float control = (Kp * error) + (Kd * (error - last_error));
+				last_error = error;
+
+				int left_speed = base_speed + (int)control;
+				int right_speed = base_speed - (int)control;
+
+				// 속도 범위 제한
+				if(left_speed > 0) { motor1Forward(); }
+				else { motor1Backward(); }
+				if(right_speed > 0) { motor2Forward(); }
+				else { motor2Backward(); }
+							
+				if (left_speed > 220) left_speed = 220;
+				if (left_speed < 0)
+				{
+					if(left_speed < -220){left_speed = 220;}
+					else{left_speed = -left_speed;}
+				}
+				if (right_speed > 220) right_speed = 220;
+				if (right_speed < 0)
+				{
+					if(right_speed < -220){right_speed = 220;}
+					else{right_speed = -right_speed;}
+				}
+							
+				set_speed((unsigned char)left_speed, (unsigned char)right_speed);
+			}
+		}
+		
 		// 기본
 		if(basic_mode)
 		{
 			// 좌측 급커브
-			if (is_left) {
+			if (is_left)
+			{
 				set_speed(0, 0);
 				motor1Backward();
 				motor2Forward();
@@ -307,7 +451,8 @@ int main(void)
 				_delay_ms(28);
 			}
 			// 우측 급커브
-			else if (is_right) {
+			else if (is_right)
+			{
 				set_speed(0, 0);
 				motor1Forward();
 				motor2Backward();
@@ -315,19 +460,19 @@ int main(void)
 				last_turn_dir = 1;
 				_delay_ms(28);
 			}
-			else if (detect_count == 0) {
+			else if (detect_count == 0)
+			{
 				missing_count++;
 					
 				// 000000 -> 관성대로 회전
-				if (missing_count > 30) {
-					if (last_turn_dir == -1) {
-						motor1Forward(); motor2Forward(); set_speed(0, 100);
-						} else {
-						motor1Forward(); motor2Forward(); set_speed(100, 0);
-					}
+				if (missing_count > 30)
+				{
+					if (last_turn_dir == -1) { motor1Forward(); motor2Forward(); set_speed(0, 100); }
+					else{ motor1Forward(); motor2Forward(); set_speed(100, 0); }
 				}
 			}
-			else {
+			else
+			{
 				missing_count = 0;
 					
 				float error = (-5.0f * normalization[0]) +
@@ -380,12 +525,14 @@ int main(void)
 			_delay_ms(3);
 			
 			
-			lcdNumber(0,0,is_cross_pass);
+			lcdNumber(0,0,is_stop_bar_flag);
 			lcdNumber(0,5,is_line_flag);
 			lcdNumber(0,10,is_line_course_end);
 			
-			lcdNumber(1,0,bin[0]);
-			lcdNumber(1,5,bin[5]);
+			lcdNumber(1,0,turn_left);
+			lcdNumber(1,5,is_parking_end);
+			lcdNumber(1,10,is_parking_flag);
+			// lcdNumber(1,5,bin[5]);
 			/*
 			for (int i = 0; i < 6; i++)
 			{
