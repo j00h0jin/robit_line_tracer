@@ -395,8 +395,8 @@ int main(void)
 				( 2.5f * normalization[4]) +
 				( 5.0f * normalization[5]);
 
-				if (error < -0.9f) last_turn_dir = -1;
-				else if (error > 0.9f) last_turn_dir = 1;
+				if (error < -0.75f) last_turn_dir = -1;
+				else if (error > 0.75f) last_turn_dir = 1;
 
 				float control = (Kp * error) + (Kd * (error - last_error));
 				last_error = error;
@@ -438,9 +438,10 @@ int main(void)
 			_delay_ms(3);
 			
 			
-			lcdNumber(0,0,is_cross_pass);
-			lcdNumber(0,5,full_count);
+			lcdNumber(0,0,full_count);
 			lcdNumber(0,10,is_8);
+			lcdNumber(0,5,is_cross_pass);
+			
 
 			// lcdNumber(1,5,bin[5]);
 			/*
