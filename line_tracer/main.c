@@ -31,6 +31,9 @@ volatile unsigned int adc_PSD_value[2]; // [1] 사용
 volatile unsigned int adc_value[6];
 volatile int current_idx = 0;
 
+int full_count = 0;
+int prev_is_Full = 0;
+
 volatile unsigned int ms_count = 0;
 volatile unsigned char print_flag = 0;
 ISR(TIMER0_OVF_vect) // timer0 interrupt
@@ -120,8 +123,9 @@ int main(void)
 	int missing_count = 0; // 000000일 때 count됨
 	int basic_mode = 1; 
 	
+	int is_8 = 0;
 	int cross_state = 0; // 중앙 센서 최소 하나 포함 검은색 3개 이상
-	int is_cross_pass = 0; // 역회전 count
+	int is_cross_pass = 0; // 역회전
 	int is_8_flag = 0; // 8 코스 종료
 	
 	int is_line_course = 0; // 차선 코스 시작
@@ -209,34 +213,38 @@ int main(void)
 		int is_full = bin[0] && bin[1] && bin[2] && bin[3] && bin[4] && bin[5];
 		int is_left = (normalization[0] >= 0.7f && normalization[1] >= 0.7f)||(normalization[1] >= 0.7f && normalization[2] >= 0.7f);
 		int is_right = (normalization[4] >= 0.7f && normalization[5] >= 0.7f) || (normalization[3] >= 0.7f && normalization[4] >= 0.7f);
-		// int is_left = (bin[0] && bin[1])||(bin[1] && bin[2]);
-		// int is_right = (bin[4] && bin[5]) || (bin[3] && bin[4]);
+		
+		if(is_full && !prev_is_Full) full_count++;
+		prev_is_Full = is_full;
+		
+		if(full_count >= 3) is_8 = 1;
 		
 		// 8자
-		if(!is_8_flag)
+		if(is_8 && !is_cross_pass)
 		{
 			if (is_center && detect_count >= 3 ) {cross_state = 1;}
 			if (cross_state == 1 && is_fork)
 			{
 				cross_state = 0;
+				motor1Forward(); motor2Forward();
+				if (last_turn_dir == -1) {set_speed(80, 130);}
+				else  {set_speed(130, 80);}
+				_delay_ms(250);
 				// 8자 다음원으로 넘어가기 위해 반대 방향으로 걸어줌
 				if (last_turn_dir == -1) {
 					motor1Forward(); motor2Forward();
-					set_speed(150, 65);
+					set_speed(150, 100);
 					last_turn_dir = 1;
 					} else {
 					motor1Forward(); motor2Forward();
-					set_speed(65, 150); 
+					set_speed(100, 150); 
 					last_turn_dir = -1;
 				}
-				_delay_ms(70);
+				_delay_ms(150);
 				last_error = 0.0f;
 				missing_count = 0;
-			
-				motor1Forward(); motor2Forward();
-				set_speed(90, 90);
-				_delay_ms(10);
-				is_cross_pass++;
+
+				is_cross_pass = 1;
 			
 				continue;
 			}
@@ -244,7 +252,7 @@ int main(void)
 		} 
 		
 		
-		if(is_cross_pass >= 11) is_8_flag = 1; // TODO: 수정 필요(is_cross_pass가 8자 진입부터 count되도록 변경하기) + 8자 안정화
+		if(is_cross_pass == 1) is_8_flag = 1;
 		// 차선 코스
 		if(is_8_flag && is_full)
 		{
@@ -335,107 +343,12 @@ int main(void)
 			}
 		}
 		
+		/*
 		if(is_parking && is_stop_bar_flag)
 		{
-			basic_mode = 0;
-			if ((normalization[0] >= 0.7f || normalization[1] >= 0.7f) && !turn_left) 
-			{
-				if(bin[0] && bin[1] && !bin[2] && !bin[3] && bin[4] && bin[5])
-				{
-					motor1Stop(); motor2Stop();
-					set_speed(0, 0);
-					is_parking_flag = 1;
-					while(1);
-				}
-				motor1Stop(); motor2Stop();
-				set_speed(0, 0);
-				_delay_ms(50);
-				
-				motor1Backward(); motor2Forward();
-				set_speed(100, 100);
-				_delay_ms(500);
-				
-				turn_left = 1;
-				last_turn_dir = -1;
-				last_error = 0;
-			}
-			else if (detect_count == 0)
-			{
-				missing_count++;
-							
-				// 000000 -> 후진
-				if (missing_count > 30)
-				{
-					if(!is_parking_end)
-					{
-						is_parking_end = 1;
-						turn_left = 0;
-						motor1Forward(); motor2Forward();
-						set_speed(80, 80);
-						while(!is_full);
-						_delay_ms(2000);
-						motor1Backward(); motor2Backward();
-						set_speed(80, 80);
-						while(is_full);
-						while(detect_count == 0);
-						while(!is_full);
-					}
-					else
-					{
-						turn_left = 1;
-						motor1Backward(); motor2Backward();
-						set_speed(80, 80);
-						while(detect_count == 0);
-						
-						turn_left = 0;
-						motor1Forward(); motor2Forward();
-						set_speed(80, 80);
-						
-					}
-				}
-			}
-			else
-			{
-				missing_count = 0;
-							
-				float error = (-5.0f * normalization[0]) +
-				(-2.5f * normalization[1]) +
-				(-0.5f * normalization[2]) +
-				( 0.5f * normalization[3]) +
-				( 2.5f * normalization[4]) +
-				( 5.0f * normalization[5]);
-
-				if (error < -1.0f) last_turn_dir = -1;
-				else if (error > 1.0f) last_turn_dir = 1;
-
-				float control = (Kp * error) + (Kd * (error - last_error));
-				last_error = error;
-
-				int left_speed = base_speed + (int)control;
-				int right_speed = base_speed - (int)control;
-
-				// 속도 범위 제한
-				if(left_speed > 0) { motor1Forward(); }
-				else { motor1Backward(); }
-				if(right_speed > 0) { motor2Forward(); }
-				else { motor2Backward(); }
-							
-				if (left_speed > 220) left_speed = 220;
-				if (left_speed < 0)
-				{
-					if(left_speed < -220){left_speed = 220;}
-					else{left_speed = -left_speed;}
-				}
-				if (right_speed > 220) right_speed = 220;
-				if (right_speed < 0)
-				{
-					if(right_speed < -220){right_speed = 220;}
-					else{right_speed = -right_speed;}
-				}
-							
-				set_speed((unsigned char)left_speed, (unsigned char)right_speed);
-			}
+			
 		}
+		*/
 		
 		// 기본
 		if(basic_mode)
@@ -482,8 +395,8 @@ int main(void)
 				( 2.5f * normalization[4]) +
 				( 5.0f * normalization[5]);
 
-				if (error < -1.0f) last_turn_dir = -1;
-				else if (error > 1.0f) last_turn_dir = 1;
+				if (error < -0.9f) last_turn_dir = -1;
+				else if (error > 0.9f) last_turn_dir = 1;
 
 				float control = (Kp * error) + (Kd * (error - last_error));
 				last_error = error;
@@ -525,13 +438,10 @@ int main(void)
 			_delay_ms(3);
 			
 			
-			lcdNumber(0,0,is_stop_bar_flag);
-			lcdNumber(0,5,is_line_flag);
-			lcdNumber(0,10,is_line_course_end);
-			
-			lcdNumber(1,0,turn_left);
-			lcdNumber(1,5,is_parking_end);
-			lcdNumber(1,10,is_parking_flag);
+			lcdNumber(0,0,is_cross_pass);
+			lcdNumber(0,5,full_count);
+			lcdNumber(0,10,is_8);
+
 			// lcdNumber(1,5,bin[5]);
 			/*
 			for (int i = 0; i < 6; i++)
