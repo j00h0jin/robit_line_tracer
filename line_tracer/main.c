@@ -49,26 +49,26 @@
 
 void set_speed(unsigned char speed_1, unsigned char speed_2);
 
-volatile unsigned int adc_PSD_value[2]; // [1] 사용
-volatile unsigned int adc_value[6];
-volatile int current_idx = 0;
+volatile unsigned int adc_PSD_value[2]; // [1] 사용, [0] 연결 안함
+volatile unsigned int adc_value[6]; // IR
+volatile int current_idx = 0; // IR for문용
 
-int full_count = 0;
-int prev_is_Full = 0;
+int full_count = 0; // IR 전부 인식 시 count 111111
+int prev_is_Full = 0; // full count 중복 카운트 방지
 
 volatile int minMax[indexIR][2]; // 정규화에 필요한 포트별 min, max 값 저장
 
 volatile float normalization[indexIR] = {0}; // 정규화 값
-volatile float voltage[2] = {0};             // PSD
-volatile int bin[6] = {0};
-volatile int detect_count = 0;
-volatile int is_dark = 0;
+volatile float voltage[2] = {0};             // PSD V 변환
+volatile int bin[6] = {0}; // ADC 정규화 값을 특정값과 비교하여 1 또는 0 (바이너리)
+volatile int detect_count = 0; // 감지된 값 개수(0~6)
+volatile int is_dark = 0; //흑색 맵 들어갔는지
 
-void _delay_ms_minMax_update(int ms);
-void is_bin();
+void _delay_ms_minMax_update(int ms); // 딜레이 동안 min max 업데이트(흑색 진입시 사용)
+void is_bin(); // bin값을 while문 내에서 또 호출할 때
 
 volatile unsigned int ms_count = 0;
-volatile unsigned char print_flag = 0;
+volatile unsigned char print_flag = 0; // timer flag(LCD 과연산 방지)
 ISR(TIMER0_OVF_vect) // timer0 interrupt
 {
     // 클럭 / 분주비 = 250KHz (16MHz / 64)
@@ -111,8 +111,8 @@ int main(void)
     TCNT0 = 256 - 250;
     TIMSK |= (1 << TOIE0); // timer0 interrupt 활성화
 
-    sei();
-    _delay_ms(10); // 전역 인터럽트 활성화
+    sei(); // 전역 인터럽트 활성화
+    _delay_ms(10); 
 
     // 첫 변환 시작
     ADCSRA |= (1 << ADSC);
@@ -150,32 +150,30 @@ int main(void)
     // PD 제어
     float Kp = 45.0f; // 비례
     float Kd = 35.0f; // 적분
-    int base_speed = 90;
+    int base_speed = 90; 
     float last_error = 0.0f; // PD control prev error
-    int last_turn_dir = 0;   // -1: 좌회전, 1: 우회전
+    int last_turn_dir = 0;   // -1: 좌회전, 1: 우회전 (마지막 회전 방향 기억)
 
     int missing_count = 0; // 000000일 때 count됨
-    int basic_mode = 1;
+    int basic_mode = 1; // line tracing (basic)
 
-    int is_8 = 0;
-    // int cross_state = 0;   // 중앙 센서 최소 하나 포함 검은색 3개 이상
-    // int is_cross_pass = 0; // 역회전
+    int is_8 = 0; // 8 진입
     int is_8_flag = 0; // 8 코스 종료
 
     int is_line_course = 0;     // 차선 코스 시작
     int is_line_course_end = 0; // 차선 코스 끝 부분 도달
     int is_line_flag = 0;       // 차선 코스 종료
 
-    int is_recognize = 0;
-    int is_stop_bar_flag = 0;
+    int is_recognize = 0; // psd 인지
+    int is_stop_bar_flag = 0; // 차단바 구간 종료
 
     // int is_turn_left_first = 0;  // 첫번째 좌회전
     // int is_parking_end = 0;      // 주차 완료
-    int is_parking_flag = 0;
+    int is_parking_flag = 0; // 주차 구간 종료
 
-    int is_overlap_flag = 0;
+    int is_overlap_flag = 0; // 반전 종료
 
-    int is_dark_flag = 0;
+    int is_dark_flag = 0; // 숫자에 따라 동작(is dark되면 count)
 
     // test(차단바)
     // is_8_flag = 1;
@@ -238,7 +236,7 @@ int main(void)
                 normalization[i] = 1.0f - (float)(moveAvgFilterValue[i] - minMax[i][0]) / temp;
         }
 
-        // PSD
+        // PSD 볼트 변환
         for (int i = 0; i < 2; i++)
         {
             voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
@@ -268,13 +266,13 @@ int main(void)
         float dir_std = 0.55f;
 
         int is_center = (bin[2] || bin[3]); // 중앙 센서 반응
-        int is_full = bin[0] && bin[1] && bin[2] && bin[3] && bin[4] && bin[5];
+        int is_full = bin[0] && bin[1] && bin[2] && bin[3] && bin[4] && bin[5]; // 111111
         int is_left = (normalization[0] >= dir_std && normalization[1] >= dir_std) ||
-                      (normalization[1] >= dir_std && normalization[2] >= dir_std);
+                      (normalization[1] >= dir_std && normalization[2] >= dir_std); //01 or 12
         int is_right = (normalization[4] >= dir_std && normalization[5] >= dir_std) ||
-                       (normalization[3] >= dir_std && normalization[4] >= dir_std);
+                       (normalization[3] >= dir_std && normalization[4] >= dir_std); //34 or 45
 
-        if (is_full && !prev_is_Full)
+        if (is_full && !prev_is_Full) // 라이징 엣지인 경우만 읽어오도록 함
             full_count++;
         prev_is_Full = is_full;
 
@@ -445,13 +443,8 @@ int main(void)
             is_8 = 1;
         }
 
-        // int is_fork = (bin[0] || bin[1] || bin[4] || bin[5]) && (detect_count >= 5);
-
-        if (is_8 && !is_8_flag) //! is_cross_pass
-        {
-            // if (is_center && detect_count >= 3) {cross_state = 1;}
-            // if (is_center && is_fork) {
-
+        if (is_8 && !is_8_flag) 
+		{
             motor1Forward();
             motor2Forward();
             if (last_turn_dir == -1)
@@ -464,7 +457,7 @@ int main(void)
             }
 
             _delay_ms(700); // 안되면 해당 딜레이, 밑에 있는 딜레이 2개 조정해보기
-            // 8자 다음원으로 넘어가기 위해 반대 방향으로 걸어줌
+            // 8자 다음원으로 넘어가기 위해 반대 방향으로 걸어줌?인데 같은 방향으로 돌아감
             if (last_turn_dir == -1)
             {
                 motor1Forward();
@@ -483,16 +476,8 @@ int main(void)
             last_error = 0.0f;
             missing_count = 0;
 
-            // is_cross_pass = 1;
             is_8_flag = 1;
-            //}
         }
-
-        // if (is_cross_pass == 1)
-        //{
-        //	is_8_flag = 1;
-        //	continue;
-        // }
         //  8자
         //  ---
 
@@ -520,7 +505,7 @@ int main(void)
                 motor1Backward();
                 motor2Backward();
                 set_speed(100, 100);
-                _delay_ms(100);
+                _delay_ms(125);
                 motor1Stop();
                 motor2Backward();
                 set_speed(0, 100);
@@ -539,7 +524,7 @@ int main(void)
                     motor1Backward();
                     motor2Backward();
                     set_speed(100, 100);
-                    _delay_ms(250);
+                    _delay_ms(350);
                     motor1Backward();
                     motor2Backward();
                     set_speed(150, 0);
@@ -548,14 +533,15 @@ int main(void)
                 else
                 {
                     // int is_5 = bin[1] && bin[2] && bin[3] && bin[4] && bin[5];
-                    if (detect_count >= 5 && (is_line_course_end >= 3)) // is_full
+                    if (is_line_course_end >= 3) // detect_count >= 5 && // is_full
                     {
+						is_line_flag = 1;
                         last_error = 0;
-                        last_turn_dir = 1;
+						last_turn_dir = 0;
                         motor1Forward();
                         motor2Forward();
-                        // set_speed(50, 50);
-                        //_delay_ms(16);
+                        set_speed(40, 140);
+                        _delay_ms(200);
                         basic_mode = 1;
                         continue;
                     }
@@ -588,14 +574,7 @@ int main(void)
             {
                 is_recognize = 1;
             }
-            /*
-            while (voltage[1] > 1.7)
-            {
-                voltage[1] = ((float)adc_PSD_value[1] * 5) / 1023;
-                motor1Forward();
-                motor2Forward();
-                set_speed(90, 90);
-            }*/
+
             if (is_recognize == 1)
             {
                 if (voltage[1] < 1.7)
@@ -731,10 +710,10 @@ int main(void)
             last_error = 0;
         }
         // 주차 코스
-        // ---------
+        // --------
 
-        // -------------
-        // 반전 구간 진입
+        // --------
+        // 반전 구간
         if (is_parking_flag && !is_overlap_flag)
         {
             basic_mode = 0;
@@ -749,7 +728,7 @@ int main(void)
                     last_turn_dir = 1;
                     motor1Forward();
                     motor2Forward();
-                    set_speed(80, 100);
+                    set_speed(90, 100);
                     _delay_ms(600);
 
                     motor1Stop();
@@ -968,8 +947,8 @@ int main(void)
                 }
             }
         }
-        // 반전 구간 진입
-        // -------------
+        // 반전 구간
+        // --------
 
         _delay_ms(2);
     }
