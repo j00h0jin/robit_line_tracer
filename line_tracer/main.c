@@ -285,29 +285,16 @@ int main(void)
             lcdClear();
             _delay_ms(3);
 
-            /*
-            lcdNumber(0, 0, OCR1A);
-            lcdNumber(0, 5, OCR1B);
-            lcdNumber(0, 14, is_dark);
-
-            for (int i = 0; i < 6; i++)
-            {
-                if(i < 3) ;
-                // lcdFloat(0, i*5, normalization[i], 2);
-                else
-                lcdFloat(1, (i-3)*5, normalization[i], 2);
-            }
-            */
-            if (!is_dark)
-            {
+           // if (!is_dark)
+            //{
                 lcdNumber(0, 0, OCR1A);
                 lcdNumber(0, 5, OCR1B);
-                lcdNumber(0, 10, is_dark);
 
-                lcdFloat(1, 0, normalization[5], 2);
-                lcdNumber(1, 5, last_error);
-            }
-            else
+				lcdFloat(1, 0, voltage[1], 2);
+                lcdNumber(1, 5, full_count);
+                
+            //}
+            /*else
             {
                 for (int i = 0; i < 6; i++)
                 {
@@ -316,7 +303,7 @@ int main(void)
                     else
                         lcdFloat(1, (i - 3) * 5, normalization[i], 2);
                 }
-            }
+            }*/
         }
         // LCD 출력
         // --------
@@ -541,7 +528,7 @@ int main(void)
                         motor1Forward();
                         motor2Forward();
                         set_speed(40, 140);
-                        _delay_ms(200);
+                        _delay_ms(300);
                         basic_mode = 1;
                         continue;
                     }
@@ -796,10 +783,13 @@ int main(void)
                 _delay_ms_minMax_update(100);
 
                 is_dark_flag++;
+				full_count = 0;
                 _delay_ms(10);
             }
 
-            if (voltage[1] > 2.8 && is_dark)
+			/*
+			// TODO: 로직 변경 필요(PSD > 1.8 중첩 구간 종점 부근 인식)
+            if (voltage[1] > 2.8 && is_dark) // && 중첩 구간 끝나면 true인 조건
             {
                 is_recognize = 1;
             }
@@ -835,6 +825,7 @@ int main(void)
                     continue;
                 is_recognize = 0;
             }
+			*/
 
             if (is_center)
             {
@@ -851,7 +842,7 @@ int main(void)
                         set_speed(75, 80);
                     else
                         set_speed(80, 75);
-                    _delay_ms(100); // TODO: delay값 맞는지 test
+                    _delay_ms(125); // TODO: delay값 맞는지 test
                     motor1Stop();
                     motor2Stop();
                     is_bin();
@@ -903,9 +894,9 @@ int main(void)
                 error = (-5.0f * normalization[0]) + (-2.5f * normalization[1]) + (-0.5f * normalization[2]) +
                         (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
 
-                if (error < -0.5f)
+                if (error < -0.25f)
                     last_turn_dir = -1;
-                else if (error > 0.5f)
+                else if (error > 0.25f)
                     last_turn_dir = 1;
 
                 float overlap_Kp = 15.0f;
