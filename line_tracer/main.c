@@ -64,11 +64,23 @@ volatile int bin[6] = {0}; // ADC 정규화 값을 특정값과 비교하여 1 �
 volatile int detect_count = 0; // 감지된 값 개수(0~6)
 volatile int is_dark = 0; //흑색 맵 들어갔는지
 
+
+
 void _delay_ms_minMax_update(int ms); // 딜레이 동안 min max 업데이트(흑색 진입시 사용)
 void is_bin(); // bin값을 while문 내에서 또 호출할 때
 
 volatile unsigned int ms_count = 0;
 volatile unsigned char print_flag = 0; // timer flag(LCD 과연산 방지)
+
+unsigned int  ir_time[6]  = {0, 0, 0, 0, 0, 0};
+unsigned char ir_flag[6] = {0, 0, 0, 0, 0, 0};
+	
+volatile int is_turn = 0;
+volatile int is_turn_end = 0;
+
+volatile int is_overlap_end = 0;
+volatile unsigned int ms_count_is_full = 0; 
+volatile unsigned int ms_count_is_turn = 0;
 ISR(TIMER0_OVF_vect) // timer0 interrupt
 {
     // 클럭 / 분주비 = 250KHz (16MHz / 64)
@@ -76,13 +88,26 @@ ISR(TIMER0_OVF_vect) // timer0 interrupt
     // 4us * 250 = 1ms
     TCNT0 = 256 - 250; // 250번 count ((256 - 250) ~ 256)
     ms_count++;
+	if(is_overlap_end == 1)
+	{
+		ms_count_is_full++;
+	}
+	
+	if(is_turn && !is_turn_end)
+	{
+		ms_count_is_turn++;
+	}
 
-    if (ms_count >= 333 - 5) // 주기
+    if (ms_count >= 250 - 5) // 주기
     {
         ms_count = 0;
         print_flag = 1;
     }
 }
+
+
+
+
 
 ISR(ADC_vect)
 {
@@ -176,10 +201,10 @@ int main(void)
     int is_dark_flag = 0; // 숫자에 따라 동작(is dark되면 count)
 
     // test(차단바)
-    // is_8_flag = 1;
-    // is_line_course = 1;
-    // is_line_course_end = 1;
-    // is_line_flag = 1;
+    is_8_flag = 1;
+    is_line_course = 1;
+    is_line_course_end = 1;
+    is_line_flag = 1;
 
     // test (차선)
     // is_8 = 1;
@@ -291,7 +316,8 @@ int main(void)
                 lcdNumber(0, 5, OCR1B);
 
 				lcdFloat(1, 0, voltage[1], 2);
-                lcdNumber(1, 5, full_count);
+                lcdNumber(1, 5, is_overlap_end);
+				lcdNumber(1, 10, ms_count_is_full);
                 
             //}
             /*else
@@ -786,7 +812,219 @@ int main(void)
 				full_count = 0;
                 _delay_ms(10);
             }
+			
+			 for (int i = 0; i < 2; i++)
+			 {
+				 voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
+			 }
 
+			if(voltage[1] > 2.2 && !is_overlap_end)
+			{
+				is_overlap_end = 1;
+					for (int i = 0; i < 6; i++)
+					{
+						ir_time[i] = 0;
+						ir_flag[i] = 0;
+					}
+					ms_count_is_full = 0;
+			}
+			
+			if (is_overlap_end)
+			{
+				for (int i = 0; i < 6; i++)
+				{
+					if (bin[i] && !ir_flag[i])
+					{
+						ir_flag[i] = 1;              // 중복 기록 방지 플래그 ON
+						ir_time[i] = ms_count_is_full; // 현재 측정된 시간(ms) 저장
+					}
+				}
+				
+				int all_on = 1;
+				for (int i = 0; i < 6; i++)
+				{
+					if (ir_flag[i] == 0)
+					{
+						all_on = 0;
+						break;
+					}
+				}
+				if (all_on)
+				{
+					unsigned int min_time = ir_time[0];
+					unsigned int max_time = ir_time[0];
+					
+					for (int i = 1; i < 6; i++)
+					{
+						if (ir_time[i] < min_time) min_time = ir_time[i];
+						if (ir_time[i] > max_time) max_time = ir_time[i];
+					}
+					
+					unsigned int time_gap = max_time - min_time; // 첫 센서와 마지막 센서의 시간 간격
+
+					// 허용 오차 범위 내(예: 50ms 이내)에 모두 들어왔다면 정지선 확정
+					if (time_gap <= 5000)
+					{
+						is_overlap_end = 0;     // 타이머 종료
+						motor1Stop();
+						motor2Stop();
+						set_speed(0, 0);
+						_delay_ms(10);
+						while(1)
+						{
+							// 함수화 하기
+							 for (int i = 0; i < indexIR; i++)
+							 {
+								 sum = 0;
+								 for (int j = arrSize - 1; j > 0; j--)
+								 {
+									 // 한 칸씩 밀기 a, b, c => a, a, b
+									 moveAvgArr[i][j] = moveAvgArr[i][j - 1];
+								 }
+								 // New_value, a, b
+								 moveAvgArr[i][0] = adc_value[i];
+
+								 // min, max 판별
+								 if (moveAvgArr[i][0] < minMax[i][0])
+								 minMax[i][0] = moveAvgArr[i][0];
+								 // else minMax[i][0]++;
+								 if (moveAvgArr[i][0] > minMax[i][1])
+								 minMax[i][1] = moveAvgArr[i][0];
+								 // else minMax[i][1]--;
+
+								 // sum 구한 후 avg에 넣기
+								 for (int j = 0; j < arrSize; j++)
+								 {
+									 sum += moveAvgArr[i][j];
+								 }
+								 moveAvgFilterValue[i] = sum / arrSize;
+							 }
+
+							 for (int i = 0; i < indexIR; i++)
+							 {
+								 float temp;
+								 temp = minMax[i][1] - minMax[i][0]; // max - min 저장
+								 if (temp == 0) // 초기에 max - min이 0인 경우 0으로 나눌 수 없으므로 정규화 값 0으로 설정
+								 {
+									 normalization[i] = 0;
+									 continue;
+								 }
+								 if (is_dark)
+								 normalization[i] = (float)(moveAvgFilterValue[i] - minMax[i][0]) / temp;
+								 else
+								 normalization[i] = 1.0f - (float)(moveAvgFilterValue[i] - minMax[i][0]) / temp;
+							 }
+
+							 // PSD 볼트 변환
+							 for (int i = 0; i < 2; i++)
+							 {
+								 voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
+							 }
+
+							 // 라인 트레이싱 알고리즘
+
+							 float detect_std = is_dark ? 0.55f : 0.3f;
+							 detect_count = 0;
+							 for (int i = 0; i < indexIR; i++)
+							 {
+								 if (normalization[i] >= detect_std)
+								 detect_count++;
+							 }
+
+							 // 센서 이진화 (0.4 이상 1, 미만 0)
+							 float bin_std = 0.4f;
+							 for (int i = 0; i < 6; i++)
+							 {
+								 if (normalization[i] >= bin_std)
+								 bin[i] = 1;
+								 else
+								 bin[i] = 0;
+							 }
+							 // 함수화 하기
+							 // 좌우 센서 그룹 합산 비교
+							 float left_sum  = normalization[0] + normalization[1]; // -2 ~ 2
+							 float right_sum = normalization[4] + normalization[5];
+							 
+							 float diff = left_sum - right_sum;
+							 
+							 int is_full = bin[0] && bin[1] && bin[2] && bin[3] && bin[4] && bin[5]; // 111111
+
+							 // 좌우 균형이 맞으면 정렬 탈출
+							 if (diff > -0.1 && diff < 0.1 && is_full)
+							 {
+								 break;
+							 }
+
+							 // 방향에 따른 미세 피벗턴 제어
+							 if (diff >= 0)
+							 {
+								 motor1Forward();
+								 motor2Backward();
+								 set_speed(65, 65);
+								 _delay_ms(10); // 우측으로 미세 조정
+							 }
+							 else if (diff < 0)
+							 {
+								 motor1Backward();
+								 motor2Forward();
+								set_speed(65, 65);
+								 _delay_ms(10); // 좌측으로 미세 조정
+							 }
+							 else
+							 {
+								 break;
+							 }
+						}
+						motor1Forward();
+						motor2Forward();
+						set_speed(75,75);
+						while (voltage[1] > 1.7)
+						{
+							for (int i = 0; i < 2; i++)
+							{
+								voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
+							}
+
+						}
+						
+						motor1Backward();
+						motor2Forward();
+						set_speed(75,75);
+						is_turn = 1;
+						while (voltage[1] > 0.8)
+						{
+						
+							for (int i = 0; i < 2; i++)
+							{
+								voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
+							}
+						}
+						is_turn_end  = 1;
+						for (unsigned int i = 0; i < ms_count_is_turn; i++)
+						{
+							_delay_ms(1);
+						}
+						
+						motor1Stop();
+						motor2Stop();
+						set_speed(0,0);
+						_delay_ms(10);
+						
+						motor1Forward();
+						motor2Forward();
+						set_speed(75,75);
+					}
+				}
+
+				// 예외 처리: PSD는 넘었으나 일정 시간(예: 400ms) 동안 6개가 다 안 켜지면 오인식으로 판단 후 복귀
+				//else if (ms_count_is_full > 500)
+				//{
+				//	is_overlap_end = 0;
+				//}
+				
+			}
+				
+			
 			/*
 			// TODO: 로직 변경 필요(PSD > 1.8 중첩 구간 종점 부근 인식)
             if (voltage[1] > 2.8 && is_dark) // && 중첩 구간 끝나면 true인 조건
