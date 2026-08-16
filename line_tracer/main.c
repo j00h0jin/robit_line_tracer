@@ -192,8 +192,7 @@ int main(void)
     int is_recognize = 0; // psd 인지
     int is_stop_bar_flag = 0; // 차단바 구간 종료
 
-    // int is_turn_left_first = 0;  // 첫번째 좌회전
-    // int is_parking_end = 0;      // 주차 완료
+	int is_parking_step = 0;
     int is_parking_flag = 0; // 주차 구간 종료
 
     int is_overlap_flag = 0; // 반전 종료
@@ -201,10 +200,11 @@ int main(void)
     int is_dark_flag = 0; // 숫자에 따라 동작(is dark되면 count)
 
     // test(차단바)
-    is_8_flag = 1;
-    is_line_course = 1;
-    is_line_course_end = 1;
-    is_line_flag = 1;
+    //is_8_flag = 1;
+    //is_line_course = 1;
+    //is_line_course_end = 1;
+    //is_line_flag = 1;
+    //is_stop_bar_flag = 1;
 
     // test (차선)
     // is_8 = 1;
@@ -315,9 +315,8 @@ int main(void)
                 lcdNumber(0, 0, OCR1A);
                 lcdNumber(0, 5, OCR1B);
 
-				lcdFloat(1, 0, voltage[1], 2);
-                lcdNumber(1, 5, is_overlap_end);
-				lcdNumber(1, 10, ms_count_is_full);
+				lcdFloat(1, 0, full_count, 2);
+                lcdNumber(1, 5, is_parking_step);
                 
             //}
             /*else
@@ -590,7 +589,7 @@ int main(void)
 
             if (is_recognize == 1)
             {
-                if (voltage[1] < 1.7)
+                if (voltage[1] < 1.8)
                 {
                     motor1Stop();
                     motor2Stop();
@@ -608,125 +607,115 @@ int main(void)
                 is_recognize = 0;
                 last_error = 0;
                 last_turn_dir = 0;
+				full_count = 0;
             }
         }
         // 차단바 코스
         // ----------
 
-        // -------------------------------------
-        // 주차 코스(일단 제외하고 나중에 짜기 TODO)
+        // --------
+        // 주차 코스
         if (is_stop_bar_flag && !is_parking_flag)
         {
-            // 기본 모드 끄기
 
-            /*
-            if(is_turn_left_first && !is_parking_end) // 1회용
-            {
-                if(is_full)
-                {
-                    motor1Stop();
-                    motor2Stop();
-                    set_speed(0, 0);
-                    _delay_ms(1500);
-                    is_parking_end = 1;
-                }
-            }
+			basic_mode = 0;
+			
+			
+			if(bin[0] && is_parking_step == 0)
+			{
+				motor1Forward();
+				motor2Forward();
+				set_speed(75, 75);
+				_delay_ms(200);
+				
+				motor1Backward();
+				motor2Forward();
+				set_speed(75, 75);
+				_delay_ms(500);
+				last_turn_dir = -1;
+				is_parking_step = 1;
+			}
+			
+			if(detect_count >= 5 && is_parking_step == 1)
+			{
+				 motor1Stop();
+				 motor2Stop();
+				 set_speed(0, 0);
+				 _delay_ms(2500);
+				 is_parking_step = 2;
+			}
+			
+			if(bin[0] && is_parking_step == 2)
+			{
+				motor1Backward();
+				motor2Forward();
+				set_speed(75, 75);
+				_delay_ms(250);
+				last_turn_dir = -1;
+				is_parking_step = 3;
+			}
+			
+			if(!is_center)
+			{
+				if (last_turn_dir == -1)
+				{
+					motor1Backward();
+					motor2Forward();
+					set_speed(75, 75);
+				}
+				else
+				{
+					motor1Forward();
+					motor2Backward();
+					set_speed(75, 75);
+				}
+			}
+			else
+			{
+				float overlap_error =(-0.75f * normalization[1]) + (-0.75f * normalization[2]) + (0.75f * normalization[3]) + (0.75f * normalization[4]);
 
-            if(bin[0] && bin[1])
-            {
-                is_turn_left_first = 1;
-                motor1Forward();
-                motor2Forward();
-                set_speed(75, 75);
-                _delay_ms(100);
-                motor1Backward();
-                motor2Forward();
-                set_speed(75, 75);
-                last_turn_dir = -1;
-                _delay_ms(100);
-            }
-            else if(is_center)
-            {
-                float error = (-5.0f * normalization[0]) + (-2.5f * normalization[1]) + (-0.5f * normalization[2]) +
-                (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
+				float error = (-5.0f * normalization[0]) + (-2.5f * normalization[1]) + (-0.5f * normalization[2]) +
+				(0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
 
-                if (error < -0.4f)
-                last_turn_dir = -1;
-                else if (error > 0.4f)
-                last_turn_dir = 1;
+				if (error < -0.25f)
+					last_turn_dir = -1;
+				else if (error > 0.25f)
+					last_turn_dir = 1;
 
-                float control = (Kp * error) + (Kd * (error - last_error));
-                last_error = error;
+				float overlap_Kp = 15.0f;
+				float overlap_Kd = 10.0f;
 
-                int left_speed = base_speed + (int)control;
-                int right_speed = base_speed - (int)control;
+				float control = (overlap_Kp * overlap_error) + (overlap_Kd * (overlap_error - last_error));
+				last_error = overlap_error;
 
-                // 속도 범위 제한
-                if (left_speed > 0)
-                {
-                    motor1Forward();
-                }
-                else
-                {
-                    motor1Backward();
-                }
-                if (right_speed > 0)
-                {
-                    motor2Forward();
-                }
-                else
-                {
-                    motor2Backward();
-                }
+				int left_speed = base_speed + (int)control;
+				int right_speed = base_speed - (int)control;
 
-                if (left_speed > 220)
-                left_speed = 220;
-                if (left_speed < 0)
-                {
-                    if (left_speed < -220)
-                    {
-                        left_speed = 220;
-                    }
-                    else
-                    {
-                        left_speed = -left_speed;
-                    }
-                }
-                if (right_speed > 220)
-                right_speed = 220;
-                if (right_speed < 0)
-                {
-                    if (right_speed < -220)
-                    {
-                        right_speed = 220;
-                    }
-                    else
-                    {
-                        right_speed = -right_speed;
-                    }
-                }
+				// 직진 속도 보장
+				if (left_speed < 70)
+				left_speed = 70;
+				if (right_speed < 70)
+				right_speed = 70;
+				if (left_speed > 130)
+				left_speed = 130;
+				if (right_speed > 130)
+				right_speed = 130;
 
-                set_speed((unsigned char)left_speed, (unsigned char)right_speed);
-            }
-
-            else if(detect_count == 0)
-            {
-                _delay_ms(100);
-                motor1Forward();
-                motor2Backward();
-                set_speed(75, 75);
-                last_turn_dir = 1;
-                _delay_ms(100);
-            }
-            */
-            is_parking_flag = 1;
-            last_error = 0;
+				motor1Forward();
+				motor2Forward();
+				set_speed((unsigned char)left_speed, (unsigned char)right_speed);
+			}
+			
+			if(full_count >= 1)
+			{
+				is_parking_flag = 1;
+			}
         }
         // 주차 코스
         // --------
 
-        // --------
-        // 반전 구간
+        // --------------------
+        // 반전 구간 + 중첩 구간
         if (is_parking_flag && !is_overlap_flag)
         {
             basic_mode = 0;
@@ -818,6 +807,9 @@ int main(void)
 				 voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
 			 }
 
+
+			// -----------
+			// 벽 인식 구간
 			if(voltage[1] > 2.2 && !is_overlap_end)
 			{
 				is_overlap_end = 1;
@@ -849,6 +841,7 @@ int main(void)
 						break;
 					}
 				}
+				
 				if (all_on)
 				{
 					unsigned int min_time = ir_time[0];
@@ -869,7 +862,7 @@ int main(void)
 						motor1Stop();
 						motor2Stop();
 						set_speed(0, 0);
-						_delay_ms(10);
+						_delay_ms(100);
 						while(1)
 						{
 							// 함수화 하기
@@ -950,8 +943,12 @@ int main(void)
 							 int is_full = bin[0] && bin[1] && bin[2] && bin[3] && bin[4] && bin[5]; // 111111
 
 							 // 좌우 균형이 맞으면 정렬 탈출
-							 if (diff > -0.1 && diff < 0.1 && is_full)
+							 if (diff > -0.1 && diff < 0.1 ) // && is_full
 							 {
+								 motor1Stop();
+								 motor2Stop();
+								 set_speed(0, 0);
+								 _delay_ms(100);
 								 break;
 							 }
 
@@ -960,14 +957,14 @@ int main(void)
 							 {
 								 motor1Forward();
 								 motor2Backward();
-								 set_speed(65, 65);
+								 set_speed(60, 65);
 								 _delay_ms(10); // 우측으로 미세 조정
 							 }
 							 else if (diff < 0)
 							 {
 								 motor1Backward();
 								 motor2Forward();
-								set_speed(65, 65);
+								set_speed(65, 60);
 								 _delay_ms(10); // 좌측으로 미세 조정
 							 }
 							 else
@@ -1023,47 +1020,6 @@ int main(void)
 				//}
 				
 			}
-				
-			
-			/*
-			// TODO: 로직 변경 필요(PSD > 1.8 중첩 구간 종점 부근 인식)
-            if (voltage[1] > 2.8 && is_dark) // && 중첩 구간 끝나면 true인 조건
-            {
-                is_recognize = 1;
-            }
-            if (is_recognize == 1)
-            {
-                if (voltage[1] < 1.7)
-                {
-                    voltage[1] = ((float)adc_PSD_value[1] * 5) / 1023;
-                    motor1Forward();
-                    motor2Forward();
-                    set_speed(90, 90);
-                }
-                else
-                    continue;
-
-                motor1Stop();
-                motor2Stop();
-                set_speed(0, 0);
-                _delay_ms(1000);
-                while (voltage[1] > 0.7)
-                {
-                    voltage[1] = ((float)adc_PSD_value[1] * 5) / 1023;
-                    motor1Backward();
-                    motor2Forward();
-                    set_speed(90, 90);
-                }
-                _delay_ms(500);
-                motor1Forward();
-                motor2Forward();
-                set_speed(90, 90);
-                _delay_ms(250);
-                if (detect_count == 0)
-                    continue;
-                is_recognize = 0;
-            }
-			*/
 
             if (is_center)
             {
@@ -1147,14 +1103,14 @@ int main(void)
                 int right_speed = base_speed - (int)control;
 
                 // 직진 속도 보장
-                if (left_speed < 60)
-                    left_speed = 60;
-                if (right_speed < 60)
-                    right_speed = 60;
-                if (left_speed > 140)
-                    left_speed = 140;
-                if (right_speed > 140)
-                    right_speed = 140;
+                if (left_speed < 70)
+                    left_speed = 70;
+                if (right_speed < 70)
+                    right_speed = 70;
+                if (left_speed > 130)
+                    left_speed = 130;
+                if (right_speed > 130)
+                    right_speed = 130;
 
                 motor1Forward();
                 motor2Forward();
@@ -1166,18 +1122,18 @@ int main(void)
                 {
                     motor1Backward();
                     motor2Forward();
-                    set_speed(100, 100);
+                    set_speed(75, 75);
                 }
                 else
                 {
                     motor1Forward();
                     motor2Backward();
-                    set_speed(100, 100);
+                    set_speed(75, 75);
                 }
             }
         }
-        // 반전 구간
-        // --------
+        // 반전 구간 + 중첩 구간
+		// --------------------
 
         _delay_ms(2);
     }
