@@ -332,7 +332,7 @@ int main(void)
 
             lcdNumber(0, 0, OCR1A);
             lcdNumber(0, 5, OCR1B);
-            lcdFloat(0, 10, normalization[2], 2);
+            lcdNumber(0, 10, full_count);
 
             lcdFloat(1, 0, voltage[1], 1);
             lcdNumber(1, 5, is_overlap_end);
@@ -1008,9 +1008,9 @@ int main(void)
 				
                 motor1Forward();
                 motor2Forward();
-                set_speed(82, 77);
+                set_speed(81, 77);
 
-                if (voltage[1] < 1.59)
+                if (voltage[1] < 1.61)
                 {
                     low_count++;
                     _delay_ms(2);
@@ -1072,29 +1072,26 @@ int main(void)
                     full_count = 0;
                 }
             }
-			
-			// int is_4 = bin[1] && bin[2] && bin[3] && bin[4];
 
-            if (is_overlap_end == 6 && is_full) // TODO test 해보기
+            if (is_overlap_end == 6 && full_count >= 1) // TODO 여기 안됨 (full cnt 인식 X)
             {
-				_delay_ms(200);
-				if(detect_count == 0)
-				{
                 motor1Forward();
                 motor2Forward();
                 set_speed(81, 75);
+				_delay_ms(200);
 				is_overlap_end = 7;
-				}
+				
             }
 
             if (is_overlap_end == 7) // && full_count >= 2
             {
-				motor1Forward();
-				motor2Forward();
-				set_speed(81, 75);
-				if(is_full)
+				if(detect_count >= 4)
 				{
-					_delay_ms(200);
+					motor1Forward();
+					motor2Forward();
+					set_speed(81, 75);
+					_delay_ms(400);
+					
 					motor1Stop();
 					motor2Stop();
 					set_speed(0, 0);
@@ -1208,7 +1205,7 @@ int main(void)
             }
             else // center 00
             {
-                if(is_overlap_end >= 3)
+				if(is_overlap_end >= 3)
                 {
 	                error = (-3.0f * normalization[0]) + (-1.5f * normalization[1]) + (-0.5f * normalization[2]) +
 	                (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
