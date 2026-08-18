@@ -15,6 +15,9 @@
 #include <avr/io.h>
 #include <util/delay.h>
 
+// 원래 계획은 완주까지 성공한 뒤 마지막에 리팩토링을 할 예정이었으나 리팩토링을 하지 못한 관계로 코드가 다소
+// 지저분합니다 대신 주석 처리를 따로 해놓았습니다
+
 // PB0, 1 모터1 방향 제어
 // PB2, 3 모터2 방향 제어
 // PB5, 6 모터1 속도, 모터2 속도
@@ -76,20 +79,17 @@ volatile unsigned int ms_count = 0;
 volatile unsigned char print_flag = 0; // timer flag(LCD 과연산 방지)
 
 unsigned int ir_time[6] = {0, 0, 0, 0, 0, 0};
-unsigned char ir_flag[6] = {0, 0, 0, 0, 0, 0};
+unsigned char ir_flag[6] = {0, 0, 0, 0, 0, 0}; // 벽 인식 구간 정지선 정렬을 위해 사용
 
-volatile int is_turn = 0;
-volatile int is_turn_end = 0;
-
-volatile int is_overlap_end = 0;
+volatile int is_overlap_end = 0; // 원래는 중첩구간 종료 시 사용하는 변수였는데 짜다 보니 완주까지 가는 step으로 사용됨
 volatile unsigned int ms_count_is_full = 0;
 volatile unsigned int ms_count_is_turn = 0;
 
-volatile int is_stop_bar_end = 0;
+volatile int is_stop_bar_end = 0; // 차단바 이후 count를 위해 사용
 volatile int straight_true = 0;
 volatile unsigned int ms_count_is_straight = 0;
 
-volatile int three_road_trigger = 0;
+volatile int three_road_trigger = 0; // 세갈래 count를 위해 사용
 volatile unsigned int ms_count_three_road = 0;
 volatile int three_road_flag = 0;
 
@@ -100,31 +100,30 @@ ISR(TIMER0_OVF_vect) // timer0 interrupt
     // 4us * 250 = 1ms
     TCNT0 = 256 - 250; // 250번 count ((256 - 250) ~ 256)
     ms_count++;
+
+    // 벽 인식용
     if (is_overlap_end == 1)
     {
         ms_count_is_full++;
     }
 
-    if (is_turn && !is_turn_end)
-    {
-        ms_count_is_turn++;
-    }
-
+    // 차단바 이후용
     if (is_stop_bar_end && !straight_true)
     {
         ms_count_is_straight++;
     }
-	
-	if(three_road_trigger)
-	{
-		ms_count_three_road++;
-	}
-	
-	if(ms_count_three_road >= 300)
-	{
-		three_road_flag = 1;
-	}
 
+    // 세갈래용
+    if (three_road_trigger)
+    {
+        ms_count_three_road++;
+    }
+    if (ms_count_three_road >= 300)
+    {
+        three_road_flag = 1;
+    }
+
+    // 일반 카운트
     if (ms_count >= 250 - 5) // 주기
     {
         ms_count = 0;
@@ -132,7 +131,7 @@ ISR(TIMER0_OVF_vect) // timer0 interrupt
     }
 }
 
-ISR(ADC_vect)
+ISR(ADC_vect) // ADC 인터럽트
 {
     if (current_idx < 2)
     {
@@ -193,9 +192,9 @@ int main(void)
     }
 
     // PD 제어
-    float Kp = 45.0f; // 비례
-    float Kd = 35.0f; // 적분
-    int base_speed = 90;
+    float Kp = 45.0f;        // 비례
+    float Kd = 35.0f;        // 적분
+    int base_speed = 90;     // base 속도
     float last_error = 0.0f; // PD control prev error
     int last_turn_dir = 0;   // -1: 좌회전, 1: 우회전 (마지막 회전 방향 기억)
 
@@ -219,8 +218,7 @@ int main(void)
 
     int is_dark_flag = 0; // 숫자에 따라 동작(is dark되면 count)
 
-    int low_count = 0;
-
+    int low_count = 0; // PSD값에서 사용
     float max_voltage = 0;
     int has_peak = 0;
 
@@ -284,7 +282,7 @@ int main(void)
 
         float detect_std = is_dark ? 0.55f : 0.3f;
         detect_count = 0;
-        detect_count_force = 0;
+        detect_count_force = 0; // 조금 더 강화된 기준 감지
         for (int i = 0; i < indexIR; i++)
         {
             if (normalization[i] >= detect_std)
@@ -322,7 +320,7 @@ int main(void)
         prev_is_Full = is_full;
 
         // --------
-        // LCD 출력
+        // LCD 출력(디버깅용)
         if (print_flag)
         {
             print_flag = 0;
@@ -391,6 +389,7 @@ int main(void)
             {
                 missing_count = 0;
 
+                // 중앙에서 멀어질수록 가중치를 달아 error 측정
                 float error = (-5.0f * normalization[0]) + (-2.5f * normalization[1]) + (-0.5f * normalization[2]) +
                               (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
 
@@ -399,10 +398,11 @@ int main(void)
                 else if (error > 0.4f)
                     last_turn_dir = 1;
 
+                // PD 제어 로직 활용
                 float control = (Kp * error) + (Kd * (error - last_error));
                 last_error = error;
 
-                int left_speed = base_speed + (int)control + 4;
+                int left_speed = base_speed + (int)control + 4; // 왼쪽으로 살짝 치우쳐짐 보정
                 int right_speed = base_speed - (int)control;
 
                 // 속도 범위 제한
@@ -510,10 +510,15 @@ int main(void)
             motor2Forward();
             set_speed(150, 90);
             _delay_ms(750);
+            // 흰색으로 들어가는 동안 검정색은 무시해야하므로 delay로 스킵
         }
 
         if (is_line_course && !is_line_flag)
         {
+            // [0](좌측끝), [6](우측끝)
+            // 각각 닿을 때마다 사변형 안쪽으로 향하게 함
+            // 기본적으로는 왼쪽 변을 긁으면서 가게 해두었고 오른쪽을 3번 긁었을 때 우측 끝 모서리에 있다고 판단하고
+            // 탈출
             basic_mode = 0;
 
             if (bin[0] && (is_line_course_end < 3))
@@ -588,6 +593,9 @@ int main(void)
 
         // ----------
         // 차단바 코스
+        // 회전하면서 차단바가 있는지 감지 후
+        // 차단바 앞까지 전진(voltage < 1.5)
+        // 차단바가 올라간 뒤 잠시 기다렸다가 출발
         if (is_line_flag && !is_stop_bar_flag)
         {
             if (voltage[1] > 2.8)
@@ -618,7 +626,7 @@ int main(void)
                 else
                     continue;
 
-                while (low_count < 5) // TODO 테스트 필요 // 6회 확인
+                while (low_count < 5) // 값이 튀는 걸 방지하기 위해 연속 n번 이상 시 탈출하도록 함
                 {
                     voltage[1] = ((float)adc_PSD_value[1] * 5) / 1023;
                     if (voltage[1] < 0.7)
@@ -631,7 +639,8 @@ int main(void)
                 }
                 _delay_ms(1500);
                 is_stop_bar_flag = 1;
-                is_stop_bar_end = 1;
+                is_stop_bar_end =
+                    1; // 차단바 이후 n초간 basic mode 유지, 근데 지금 보니 그냥 stop_bar_flag를 사용해도 똑같아보임
                 is_recognize = 0;
                 last_error = 0;
                 last_turn_dir = 0;
@@ -646,13 +655,13 @@ int main(void)
         // 주차 코스
         if (is_stop_bar_flag && !is_parking_flag)
         {
-            if (ms_count_is_straight >= 1500 && !straight_true) // 1.5초 뒤에 직진 모드
+            if (ms_count_is_straight >= 1500 && !straight_true) // 1.5초 뒤에 직진 우선 모드
             {
                 basic_mode = 0;
                 straight_true = 1;
             }
 
-            if (bin[0] && is_parking_step == 0)
+            if (bin[0] && is_parking_step == 0) // 좌회전 우선
             {
                 motor1Forward();
                 motor2Forward();
@@ -667,7 +676,7 @@ int main(void)
                 is_parking_step = 1;
             }
 
-            if (detect_count_force >= 5 && is_parking_step == 1)
+            if (detect_count_force >= 5 && is_parking_step == 1) // 좌회전 후 정지선을 만나면 정지
             {
                 motor1Stop();
                 motor2Stop();
@@ -676,7 +685,7 @@ int main(void)
                 is_parking_step = 2;
             }
 
-            if (is_parking_step == 2) // bin[0] &&
+            if (is_parking_step == 2) // 앞으로 살짝 갔다가 크게 회전(180도 정도)
             {
                 motor1Forward();
                 motor2Forward();
@@ -712,14 +721,14 @@ int main(void)
                 motor2Forward();
                 set_speed(75, 75);
             }
-            else
+            else // 직진 우선 주행 모드
             {
                 float overlap_error = (-0.75f * normalization[1]) + (-0.75f * normalization[2]) +
                                       (0.75f * normalization[3]) + (0.75f * normalization[4]);
 
                 float error = (-5.0f * normalization[0]) + (-2.5f * normalization[1]) + (-0.5f * normalization[2]) +
                               (0.5f * normalization[3]) + (1.5f * normalization[4]) +
-                              (2.5f * normalization[5]); // 좌회전 가중치
+                              (2.5f * normalization[5]); // 좌회전 가중치(T자에서 탈출할 때 반대로 가지 않도록)
 
                 if (error < -0.25f)
                     last_turn_dir = -1;
@@ -764,7 +773,8 @@ int main(void)
         {
             basic_mode = 0;
             float error = 0;
-            if (normalization[5] >= 0.75f) //
+            if (normalization[5] >=
+                0.75f) // T자에서 나온 뒤에 최우측 센서가 검정색을 인지했으면 흑색 맵에 들어갔다고 판단
             {
                 is_dark = 1;
                 last_error = 0;
@@ -781,6 +791,8 @@ int main(void)
                     motor2Stop();
                     set_speed(0, 0);
                     _delay_ms(500);
+
+                    // 살짝 앞으로 간 뒤에 정지
 
                     for (int i = 0; i < indexIR; i++) // min, max 초기값 설정
                     {
@@ -801,6 +813,7 @@ int main(void)
                         }
                     }
                     is_dark_flag++;
+                    // 흰색 맵에서 썼던 정보들 초기화
                     _delay_ms(10);
                 }
             }
@@ -840,10 +853,11 @@ int main(void)
                 is_dark_flag++;
                 full_count = 0;
                 _delay_ms(10);
+                // 좌우로 흔들면서 min값 max값을 갱신함
                 continue;
             }
 
-            for (int i = 0; i < 2; i++)
+            for (int i = 0; i < 2; i++) // PSD 갱신
             {
                 voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
             }
@@ -860,7 +874,11 @@ int main(void)
                 }
                 ms_count_is_full = 0;
             }
+            // 흑색 구간에 들어왔을 때부터 PSD값을 측정함
+            // 맵 상으로 벽 구간을 만나기 직전 중첩 구간에서 마지막 회전을 할 때 옆에 세워져있는 벽을 인식하게 되는데 이
+            // 벽을 인식한 경우 중첩 구간 끝부분에 왔다고 판단하게 해놨음
 
+            // 중첩구간 종점 부근일 경우 IR이 전부 켜질 때까지 기다림
             if (is_overlap_end == 1)
             {
                 for (int i = 0; i < 6; i++)
@@ -900,12 +918,16 @@ int main(void)
                     // 허용 오차 범위 내에 모두 들어왔다면 정지선 확정
                     if (time_gap <= 5000)
                     {
+                        // 사실 time_gap은 다른 로직을 짜다가 버린 구조라 사실상 죽은 코드임
+                        // 5초 이내에 all_on이 안될 경우 작동이 안되긴 하나 맵 구조상 5초 이내에 무조건 도달하므로 그냥
+                        // 두었던 것 같음 실제로 LCD로 테스트를 했을 때 3초 이상 나온 적이 X
                         motor1Stop();
                         motor2Stop();
                         set_speed(0, 0);
                         _delay_ms(500);
                         while (1)
                         {
+                            // 해당 코드 함수화 필요(정규화 코드)
                             for (int i = 0; i < indexIR; i++)
                             {
                                 sum = 0;
@@ -972,6 +994,9 @@ int main(void)
                                 else
                                     bin[i] = 0;
                             }
+
+                            // 관찰했을 때 정지선에 항상 차체가 왼쪽이 앞에 나가있고 오른쪽이 뒤에 위치했음
+                            // 따라서 앞에 나가 있는 왼쪽 IR이 1이 뜰 때까지 후진해주면 정지선에 차체가 일렬로 정렬됨
                             if (!bin[0])
                             {
                                 motor1Backward();
@@ -991,21 +1016,24 @@ int main(void)
 
             if (is_overlap_end == 2)
             {
-				for (int i = 0; i < 2; i++)
-				{
-					voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
-				}
+                // 벽 앞까지 가는 로직
+                // 첫번째 벽이 약 15cm정도, 두번째가 50cm정도 되었는데 둘 다 만족하기 위해서 해당 로직을 짬
+                // ADC 전압 변환값과 거리에 관한 그래프는 https://blog.naver.com/ann_arbor/221627224574 << 여기를 참조
+                for (int i = 0; i < 2; i++)
+                {
+                    voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
+                }
 
-				if (voltage[1] > max_voltage)
-				{
-					max_voltage = voltage[1];
-				}
-				
-				if (max_voltage >= 2.25f)
-				{
-					has_peak = 1;
-				}
-				
+                if (voltage[1] > max_voltage)
+                {
+                    max_voltage = voltage[1];
+                }
+
+                if (max_voltage >= 2.25f)
+                {
+                    has_peak = 1;
+                }
+
                 motor1Forward();
                 motor2Forward();
                 set_speed(81, 77);
@@ -1037,6 +1065,10 @@ int main(void)
 
             if (is_overlap_end == 3)
             {
+                // 좌측으로 회전을 함
+                // 기존에는 PSD값을 이용해서 PSD가 벽을 바라보지 않을 때까지 걸린 시간을 count한 뒤
+                // 그 시간만큼 delay를 더 주어서 45도 + 45도 = 90도로 할 생각이었으나 차체가 회전해서 그런지 값이
+                // 정확하게 읽혀지지 않아서 delay로 대체
                 motor1Backward();
                 motor2Forward();
                 set_speed(85, 85);
@@ -1055,6 +1087,7 @@ int main(void)
 
             if (is_overlap_end == 4)
             {
+                // 회전한 뒤 선을 만날 때까지 전진
                 if (detect_count == 0)
                 {
                     motor1Forward();
@@ -1064,10 +1097,10 @@ int main(void)
                 }
                 else
                 {
-					motor1Forward();
-					motor2Forward();
-					set_speed(83, 77);
-					_delay_ms(150);
+                    motor1Forward();
+                    motor2Forward();
+                    set_speed(83, 77);
+                    _delay_ms(150);
                     is_overlap_end = 5;
                     full_count = 0;
                 }
@@ -1075,41 +1108,50 @@ int main(void)
 
             if (is_overlap_end == 6 && full_count >= 1) // TODO 여기 안됨 (full cnt 인식 X)
             {
+                // 세갈래 이후 정지 원까지 가는 로직
+                // 세갈래 끝에 1자를 full(111111)로 인식할 줄 알았는데 그렇게 인식하지 않았음
                 motor1Forward();
                 motor2Forward();
                 set_speed(81, 75);
-				_delay_ms(200);
-				is_overlap_end = 7;
-				
+                _delay_ms(200);
+                is_overlap_end = 7;
             }
 
             if (is_overlap_end == 7) // && full_count >= 2
             {
-				if(detect_count >= 4)
-				{
-					motor1Forward();
-					motor2Forward();
-					set_speed(81, 75);
-					_delay_ms(400);
-					
-					motor1Stop();
-					motor2Stop();
-					set_speed(0, 0);
-					while (1)
-					;
-				}
-				else
-					continue;
+                // is_overlap_end이 7로 넘어가지 않아서 테스트하지 못함
+                // 이론상으로는 최종 정지 구간
+                if (detect_count >= 4)
+                {
+                    motor1Forward();
+                    motor2Forward();
+                    set_speed(81, 75);
+                    _delay_ms(400);
+
+                    motor1Stop();
+                    motor2Stop();
+                    set_speed(0, 0);
+                    while (1)
+                        ;
+                }
+                else
+                    continue;
             }
 
-            if (is_center)
+            if (is_center) // [2]나 [3]이 인식되는 경우
             {
                 if (is_dark_flag == 2)
                 {
                     is_dark_flag++;
+                    // 맨 처음인 경우 실행되지 않게 함
                 }
                 else if (is_dark_flag >= 3)
                 {
+                    // 현재 로직이 가운데가 인식되지 않을 때, 가운데가 인식될 때까지 회전하도록 되어있음
+                    // 예를 들어서 3시 방향을 바라보는 차체가 12시 방향으로 꺾어서 가야 하는데 1시 방향에 교차로가
+                    // 있다고 가정 그러면 현재 로직 상으로는 1시 방향에서 가운데가 인식되므로 1시 방향 차선에서 멈추게
+                    // 됨 이 상태에서 약간 직진을 하게되면 원래 계획했던 경로가 아니기 때문에 차선을 놓치게 됨 차선을
+                    // 놓치면 잘못된 경로에서 멈췄다고 판단하고 기존에 회전했던 방향으로 한번 더 회전하도록 한 알고리즘
                     motor1Forward();
                     motor2Forward();
                     if (last_turn_dir == -1)
@@ -1148,19 +1190,20 @@ int main(void)
                 // -----------
                 if (detect_count >= 3) // 직진 우선
                 {
+                    // 가운데가 인식되면서 IR이 여러개 감지되는 경우 직진 우선하도록 함
                     motor1Forward();
                     motor2Forward();
                     set_speed(81, 75);
-					if(is_overlap_end >= 3)
-					{
-						error = (-3.0f * normalization[0]) + (-1.5f * normalization[1]) + (-0.5f * normalization[2]) +
-						(0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
-					}
-					else
-					{
-						error = (-5.0f * normalization[0]) + (-2.5f * normalization[1]) + (-0.5f * normalization[2]) +
-                            (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
-					}
+                    if (is_overlap_end >= 3)
+                    {
+                        error = (-3.0f * normalization[0]) + (-1.5f * normalization[1]) + (-0.5f * normalization[2]) +
+                                (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
+                    }
+                    else
+                    {
+                        error = (-5.0f * normalization[0]) + (-2.5f * normalization[1]) + (-0.5f * normalization[2]) +
+                                (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
+                    }
 
                     if (error < -0.25f)
                         last_turn_dir = -1;
@@ -1205,17 +1248,18 @@ int main(void)
             }
             else // center 00
             {
-				if(is_overlap_end >= 3)
+                if (is_overlap_end >= 3) // 벽 인식 구간 이후 벽이 멀리 있는 경우 T자를 만나게 되는데 이때 반대로
+                                         // 진입하지 않도록 우측에 가중치를 더 실어줌
                 {
-	                error = (-3.0f * normalization[0]) + (-1.5f * normalization[1]) + (-0.5f * normalization[2]) +
-	                (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
+                    error = (-3.0f * normalization[0]) + (-1.5f * normalization[1]) + (-0.5f * normalization[2]) +
+                            (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
                 }
                 else
                 {
-	                error = (-5.0f * normalization[0]) + (-2.5f * normalization[1]) + (-0.5f * normalization[2]) +
-	                (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
+                    error = (-5.0f * normalization[0]) + (-2.5f * normalization[1]) + (-0.5f * normalization[2]) +
+                            (0.5f * normalization[3]) + (2.5f * normalization[4]) + (5.0f * normalization[5]);
                 }
-				
+
                 if (error < -0.25f)
                     last_turn_dir = -1;
                 else if (error > 0.25f)
@@ -1232,20 +1276,23 @@ int main(void)
                     motor1Forward();
                     motor2Backward();
                     set_speed(75, 75);
-					if(is_overlap_end == 5 && full_count >= 1)
-					{
-						set_speed(60, 60);
-						while(!(normalization[2] > 0.45f && normalization[3] > 0.45f))
-						{
-							is_bin();
-						}
-						motor1Stop();
-						motor2Stop();
-						set_speed(0, 0);
-						_delay_ms(100);
-						is_overlap_end = 6;
-						full_count = 0;
-					}
+                    if (is_overlap_end == 5 && full_count >= 1)
+                    {
+                        // 세갈래 코스 만나기 직전 우회전 부분
+                        // 차체가 최대한 일렬로 정렬되어 있어야 11시 12시 1시 방향 길에서 11시나 1시 방향으로 빠질
+                        // 확률이 적어지기 때문에 차체를 일렬로 정렬하도록 함
+                        set_speed(60, 60);
+                        while (!(normalization[2] > 0.45f && normalization[3] > 0.45f))
+                        {
+                            is_bin();
+                        }
+                        motor1Stop();
+                        motor2Stop();
+                        set_speed(0, 0);
+                        _delay_ms(100);
+                        is_overlap_end = 6;
+                        full_count = 0;
+                    }
                 }
             }
         }
@@ -1281,54 +1328,54 @@ void _delay_ms_minMax_update(int ms)
 
 void is_bin()
 {
-	 // PSD
-	 for (int i = 0; i < 2; i++)
-	 {
-		 voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
-	 }
-	 
-	int sum = 0;
-	for (int i = 0; i < indexIR; i++)
-	{
-		sum = 0;
-		for (int j = arrSize - 1; j > 0; j--)
-		{
-			// 한 칸씩 밀기 a, b, c => a, a, b
-			moveAvgArr[i][j] = moveAvgArr[i][j - 1];
-		}
-		// New_value, a, b
-		moveAvgArr[i][0] = adc_value[i];
+    // PSD
+    for (int i = 0; i < 2; i++)
+    {
+        voltage[i] = ((float)adc_PSD_value[i] * 5) / 1023;
+    }
 
-		// min, max 판별
-		if (moveAvgArr[i][0] < minMax[i][0])
-		minMax[i][0] = moveAvgArr[i][0];
-		// else minMax[i][0]++;
-		if (moveAvgArr[i][0] > minMax[i][1])
-		minMax[i][1] = moveAvgArr[i][0];
-		// else minMax[i][1]--;
+    int sum = 0;
+    for (int i = 0; i < indexIR; i++)
+    {
+        sum = 0;
+        for (int j = arrSize - 1; j > 0; j--)
+        {
+            // 한 칸씩 밀기 a, b, c => a, a, b
+            moveAvgArr[i][j] = moveAvgArr[i][j - 1];
+        }
+        // New_value, a, b
+        moveAvgArr[i][0] = adc_value[i];
 
-		// sum 구한 후 avg에 넣기
-		for (int j = 0; j < arrSize; j++)
-		{
-			sum += moveAvgArr[i][j];
-		}
-		moveAvgFilterValue[i] = sum / arrSize;
-	}
+        // min, max 판별
+        if (moveAvgArr[i][0] < minMax[i][0])
+            minMax[i][0] = moveAvgArr[i][0];
+        // else minMax[i][0]++;
+        if (moveAvgArr[i][0] > minMax[i][1])
+            minMax[i][1] = moveAvgArr[i][0];
+        // else minMax[i][1]--;
 
-	for (int i = 0; i < indexIR; i++)
-	{
-		float temp;
-		temp = minMax[i][1] - minMax[i][0]; // max - min 저장
-		if (temp == 0) // 초기에 max - min이 0인 경우 0으로 나눌 수 없으므로 정규화 값 0으로 설정
-		{
-			normalization[i] = 0;
-			continue;
-		}
-		if (is_dark)
-		normalization[i] = (float)(moveAvgFilterValue[i] - minMax[i][0]) / temp;
-		else
-		normalization[i] = 1.0f - (float)(moveAvgFilterValue[i] - minMax[i][0]) / temp;
-	}
+        // sum 구한 후 avg에 넣기
+        for (int j = 0; j < arrSize; j++)
+        {
+            sum += moveAvgArr[i][j];
+        }
+        moveAvgFilterValue[i] = sum / arrSize;
+    }
+
+    for (int i = 0; i < indexIR; i++)
+    {
+        float temp;
+        temp = minMax[i][1] - minMax[i][0]; // max - min 저장
+        if (temp == 0)                      // 초기에 max - min이 0인 경우 0으로 나눌 수 없으므로 정규화 값 0으로 설정
+        {
+            normalization[i] = 0;
+            continue;
+        }
+        if (is_dark)
+            normalization[i] = (float)(moveAvgFilterValue[i] - minMax[i][0]) / temp;
+        else
+            normalization[i] = 1.0f - (float)(moveAvgFilterValue[i] - minMax[i][0]) / temp;
+    }
 
     // 라인 트레이싱 알고리즘
 
